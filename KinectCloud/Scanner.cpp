@@ -19,8 +19,8 @@
 
 namespace kinectCloud {
 	constexpr k4a_wired_sync_mode_t defaultSyncMode = K4A_WIRED_SYNC_MODE_STANDALONE;
-	constexpr k4a_color_resolution_t defaultColorRes = K4A_COLOR_RESOLUTION_3072P;
-	constexpr k4a_depth_mode_t defaultDepthMode = K4A_DEPTH_MODE_WFOV_UNBINNED;
+	constexpr k4a_color_resolution_t defaultColorRes = K4A_COLOR_RESOLUTION_720P;
+	constexpr k4a_depth_mode_t defaultDepthMode = K4A_DEPTH_MODE_NFOV_2X2BINNED;
 	
 	bool isSerialNum(std::string const& serial) {
 		for (int i = 0; i < serial.length(); i++) {
@@ -83,7 +83,7 @@ namespace kinectCloud {
 				auto info = deviceInfo[serial];
 				dev.start(info.syncMode, info.colorRes, info.depthMode);
 			} else {
-				dev.start(defaultSyncMode, (allResolution != K4A_COLOR_RESOLUTION_OFF) ? allResolution : defaultColorRes, defaultDepthMode);
+				dev.start(defaultSyncMode, (allResolution != K4A_COLOR_RESOLUTION_OFF) ? allResolution : defaultColorRes, (allDepth != K4A_DEPTH_MODE_OFF) ? allDepth : defaultDepthMode);
 			}
 		}
 		if (colorExposure) {
@@ -116,7 +116,7 @@ namespace kinectCloud {
 			for (auto & device : devices) {
 				device.saveCurrentPointCloud(formatFilePath(outPath, device.getSerialNum(), frameNum));
 			}
-			std::cout << "frame " << frameNum << "done\n";
+			if(verbose) std::cout << "Saved " << formatFilePath(outPath, "%s", frameNum) << "\n";
 			frameNum++;
 			if (frameNum >= consecutiveCount) break;
 		}
@@ -289,7 +289,7 @@ namespace kinectCloud {
 				//std::cout << " -e              | extract colored frames into pts files\n";
 				std::cout << " -s              | capture a colored pointcloud for devices (by default first device only)\n";
 				//std::cout << " -i file         | specify input file (if applicable)\n";
-				std::cout << " -o path         | specify output locations (if applicable)\n";
+				std::cout << " -o path         | specify output locations (default %s_%f.pts)\n";
 				std::cout << "                 | %s -> serial number, %f -> frame number\n";
 				std::cout << " -w int          | wait a number of milliseconds after device startup (if applicable)\n";
 				std::cout << " -c int          | store n consecutive frames (if applicable)\n";
@@ -299,7 +299,10 @@ namespace kinectCloud {
 				std::cout << " -dt ser {a,m,s} | declare device topology, stAndalone, Master or Subordinate\n";
 				std::cout << " -dr ser {res}   | declare resolution to use for specific device\n";
 				std::cout << " -dra {res}      | declare resolution to use for all devices\n";
-				std::cout << "   color resolutions: " VALID_RESOLUTIONS ", default is 3072P\n";
+				std::cout << "   color resolutions: " VALID_RESOLUTIONS ", default is 720P\n";
+				std::cout << " -dm ser {mode}  | declare depth mode to use for specific device\n";
+				std::cout << " -dra {mode}     | declare depth mode to use for all devices\n";
+				std::cout << "   depth modes      : " VALID_DEPTHS ", default is NFOV_2X2BINNED\n";
 				std::cout << " -ce int         | color camera exposure time in nanoseconds for all devices\n";
 				std::cout << " -cw int         | color camera white balance in kelvin for all devices (must be % by 10)\n";
 				std::cout << " -v              | verbose output\n";

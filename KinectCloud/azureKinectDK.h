@@ -121,6 +121,7 @@ namespace kinectCloud {
 			}
 
 			if (k4a_device_get_capture(_device, &_capture, K4A_WAIT_INFINITE) != K4A_WAIT_RESULT_SUCCEEDED) {
+				_capture = nullptr;
 				throw std::runtime_error("capture failed");
 			}
 		}
