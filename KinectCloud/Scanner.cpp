@@ -11,6 +11,7 @@
 #include "util.h"
 #include "cloud.h"
 #include "azureKinectDK.h"
+#include "azureKinectPlayback.h"
 
 //constexpr auto FFMPEG_DIR = R"(C:\Users\bwysonggrass\Desktop\ffmpeg-20190826-0821bc4-win64-static\bin\)";
 
@@ -37,11 +38,14 @@ namespace kinectCloud {
 
 	// parameter stuff
 	std::string mode = "-n";
-	std::string inPath, outPath = "%s_%f.pts";
+	std::string inPath, outPath;
 	std::vector<std::string> specifiedSerialNums;
 	std::map<std::string, deviceInitInfo> deviceInfo;
 	std::set<std::string> otherOptions;
 	int waitMillis = 0;
+	int extractFrame = -1;
+	double minFrameDif = 0;
+	//int incFrames = 0;
 	int consecutiveCount = 1;
 	int colorExposure = 0; // in nanoseconds
 	int colorWhiteBalance = 0; // in kelvin
@@ -101,6 +105,29 @@ namespace kinectCloud {
 	// currently not implemented
 	// this will extract frames from a video
 	int extractMode() {
+		auto pb = azureKinectPlayback(inPath);
+
+		if (extractFrame >= 0) {
+			pb.seekTime(extractFrame * 1000000 / pb.framerate());
+			pb.saveCurrentPointCloud(formatFilePath(outPath, "e", std::to_string(extractFrame)));
+		} else {
+			int fps = pb.framerate();
+			int frame = 0;
+			int lastFrame = std::numeric_limits<int>::min();
+			
+			// loop until eof reached
+			while (pb.nextCapture()) {
+
+				// check if we have surpassed min wait threshold
+				if ((int64_t(frame) - int64_t(lastFrame)) / (double)fps > minFrameDif) {
+					if (pb.saveCurrentPointCloud(formatFilePath(outPath, "e", std::to_string(frame)))) {
+						lastFrame = frame;
+					}
+				}
+				frame++;
+			}
+		}
+
 		return 0;
 	}
 
@@ -114,9 +141,9 @@ namespace kinectCloud {
 				device.captureFrame();
 			}
 			for (auto & device : devices) {
-				device.saveCurrentPointCloud(formatFilePath(outPath, device.getSerialNum(), frameNum));
+				device.saveCurrentPointCloud(formatFilePath(outPath, device.getSerialNum(), std::to_string(frameNum)));
 			}
-			if(verbose) std::cout << "Saved " << formatFilePath(outPath, "%s", frameNum) << "\n";
+			if(verbose) std::cout << "Saved " << formatFilePath(outPath, "%s", std::to_string(frameNum)) << "\n";
 			frameNum++;
 			if (frameNum >= consecutiveCount) break;
 		}
@@ -135,12 +162,40 @@ namespace kinectCloud {
 		for (int i = 1; i < argc; i++) {
 			if (argv[i] == std::string("-e")) { // extract pointcloud from video
 				mode = "-e";
-			} else if(argv[i] == std::string("-s")) { // capture and save pointcloud
-				mode = "-s";
-			} else if(argv[i] == std::string("-i")) { // input path
+				if (outPath.empty()) outPath = "e_%f.pts";
 				if (++i != argc) {
 					inPath = argv[i];
-				} else badParams = true;
+				} else {
+					alerts.push_back("Error: -e must be followed by a video file path");
+					badParams = true;
+				}
+			} else if(argv[i] == std::string("-f")) { // frame to extract
+				if (++i != argc) {
+					extractFrame = std::atoi(argv[i]);
+				} else {
+					alerts.push_back("Error: -f must be followed by integer");
+					badParams = true;
+				}
+			} else if(argv[i] == std::string("-ei")) { // extraction interval
+				if (++i != argc) {
+					minFrameDif = std::stod(argv[i]);
+				} else {
+					alerts.push_back("Error: -ei must be followed by decimal value");
+					badParams = true;
+				}
+			}
+			//else if(argv[i] == std::string("-fa")) { // capture and save pointcloud
+			//	if (++i != argc) {
+			//		incFrames = argv[i];
+			//	} else {
+			//		alerts.push_back("Error: -fa must be followed by integer");
+			//		badParams = true;
+			//	}
+			//	if(incFrames < 1) incFrames = 1;
+			//}
+			else if(argv[i] == std::string("-s")) { // capture and save pointcloud
+				mode = "-s";
+				if (outPath.empty()) outPath = "%s_%f.pts";
 			} else if(argv[i] == std::string("-o")) { // output path (default %s_%f.pts)
 				if (++i != argc) {
 					outPath = argv[i];
@@ -286,9 +341,12 @@ namespace kinectCloud {
 			}
 			if (true) {
 				std::cout << "options:\n";
-				//std::cout << " -e              | extract colored frames into pts files\n";
+				std::cout << " -e              | extract all colored frames into pts files\n";
+				std::cout << " -ei wait        | minimum time between extracted frame (seconds)\n";
+				std::cout << " -f n            | extract single frame n only (may do nothing)\n";
+				std::cout << " -fa n           | extract every n frames starting at 0 from video (1 = every frame)\n";
 				std::cout << " -s              | capture a colored pointcloud for devices (by default first device only)\n";
-				//std::cout << " -i file         | specify input file (if applicable)\n";
+				std::cout << " -i file         | specify input file (if applicable)\n";
 				std::cout << " -o path         | specify output locations (default %s_%f.pts)\n";
 				std::cout << "                 | %s -> serial number, %f -> frame number\n";
 				std::cout << " -w int          | wait a number of milliseconds after device startup (if applicable)\n";
@@ -373,8 +431,7 @@ namespace kinectCloud {
 int main(int argc, char **argv) {
 	try {
 		return kinectCloud::main(argc, argv);
-	}
-	catch (std::runtime_error const& er) {
+	} catch (std::runtime_error const& er) {
 		std::cout << "Runtime Exception: " << er.what() << "\n";
 	}
 }

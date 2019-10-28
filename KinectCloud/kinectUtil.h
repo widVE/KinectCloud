@@ -95,6 +95,8 @@ namespace kinectCloud {
 		char* current = bytes.data();
 
 		uint8_t* rawData = k4a_image_get_buffer(xyzImg);
+		auto a = k4a_image_get_stride_bytes(colorImg);
+		auto b = k4a_image_get_size(colorImg);
 		uint8_t* colorData = k4a_image_get_buffer(colorImg);
 
 		for (int y = 0; y < resHeight; y++) {
@@ -147,25 +149,19 @@ namespace kinectCloud {
 		{
 			std::string tmpFileLoc = R"(.\tmpinfo.txt)";
 			std::string invoke = ffprobe_path; // FFMPEG_DIR + std::string("ffprobe.exe");
-			invoke = invoke + " -hide_banner -v quiet -print_format json -show_streams -i " + videoPath + " > " + tmpFileLoc;
+			invoke = invoke + " -hide_banner -loglevel panic -v quiet -print_format json -show_streams -i " + videoPath + " > " + tmpFileLoc;
 			exec(invoke.c_str());
-			if (waitUntilFileExists(tmpFileLoc, std::chrono::milliseconds(10 * 1000))) {
-				try {
-					std::string info = readEntireFile(tmpFileLoc);
-					json jinfo = json::parse(info);
-					res.colorHeight = jinfo["streams"][0]["height"].get<uint32_t>();
-					res.depthMode = jinfo["streams"][1]["tags"]["K4A_DEPTH_MODE"].get<std::string>();
-				}
-				catch (...) {
-					std::cout << "invalid video file\n";
-					res.valid = false;
-				}
-				remove(tmpFileLoc.c_str());
-			}
-			else {
-				std::cout << "extract file info failed\n";
+			
+			try {
+				std::string info = readEntireFile(tmpFileLoc);
+				json jinfo = json::parse(info);
+				res.colorHeight = jinfo["streams"][0]["height"].get<uint32_t>();
+				res.depthMode = jinfo["streams"][1]["tags"]["K4A_DEPTH_MODE"].get<std::string>();
+			} catch (...) {
+				std::cout << "invalid video file\n";
 				res.valid = false;
 			}
+			remove(tmpFileLoc.c_str());
 		}
 		k4a_color_resolution_t	colorResolution;
 		k4a_depth_mode_t		depthMode;
@@ -180,25 +176,68 @@ namespace kinectCloud {
 			res.valid = false;
 		}
 		if (res.valid) {
-			std::string tmpFileLoc = R"(.\tmpcali.json)";
+			std::string tmpFileLoc = "kinectCloud_tmpcali.json";
+			remove(tmpFileLoc.c_str());
 			std::string invoke = ffmpeg_path;
-			invoke = invoke + " -hide_banner -dump_attachment:4 " + tmpFileLoc + " -i " + videoPath;
+			invoke = invoke + " -hide_banner -loglevel panic -dump_attachment:4 " + tmpFileLoc + " -i " + videoPath;
 			exec(invoke.c_str());
-			if (waitUntilFileExists(tmpFileLoc, std::chrono::milliseconds(10 * 1000))) {
-				std::string info = readEntireFile(tmpFileLoc);
-				if (k4a_calibration_get_from_raw(info.data(), info.size() + 1, depthMode, colorResolution, &res.cali) != K4A_RESULT_SUCCEEDED) {
-					std::cout << "invalid calibration file\n";
-					res.valid = false;
-				}
-				remove(tmpFileLoc.c_str());
-			}
-			else {
-				std::cout << "extract file info failed\n";
+			std::string info = readEntireFile(tmpFileLoc);
+			if (k4a_calibration_get_from_raw(info.data(), info.size() + 1, depthMode, colorResolution, &res.cali) != K4A_RESULT_SUCCEEDED) {
+				std::cout << "invalid calibration file\n";
 				res.valid = false;
+			} else {
+				res.trans = k4a_transformation_create(&res.cali);
 			}
-			res.trans = k4a_transformation_create(&res.cali);
+			remove(tmpFileLoc.c_str());
 		}
 
+		return res;
+	}
+	
+	// add blank alpha component to vector of rgb pixels and remap rgb to bgr
+	std::vector<uint8_t> rgb_to_bgra(std::vector<uint8_t> const& rgbColorBytes) {
+		if (rgbColorBytes.size() % 3 != 0) throw std::runtime_error("color image bytes improperly sized");
+		std::vector<uint8_t> res;
+		res.resize(rgbColorBytes.size() / 3 * 4);
+
+		size_t resi = 0;
+		for (size_t i = 0; i < rgbColorBytes.size(); i += 3) {
+			res[resi + 0] = rgbColorBytes[i + 2];
+			res[resi + 1] = rgbColorBytes[i + 1];
+			res[resi + 2] = rgbColorBytes[i + 0];
+			res[resi + 3] = 0;
+			resi += 4;
+		}
+
+		return res;
+	}
+
+	// load png as k4a
+	// automatically detects whether format is 16 bit depth of 24 bit color
+	// converts 24 bit color into 32 bit color (a channel zeroed)
+	// does not support other types
+	// output image type will be K4A_IAMGE_FORMAT_COLOR_BGRA32 or K4A_IMAGE_FORMAT_DEPTH16
+	k4a_image_t loadPNGtoK4A(std::string const& path) {
+		int colorBits;
+		uint32_t width, height;
+		bool alpha, rgb;
+		auto data = loadPng(path, width, height, colorBits, alpha, rgb);
+		if (data.empty()) return nullptr;
+		if (rgb && !alpha) {
+			data = rgb_to_bgra(data);
+		}
+		k4a_image_t res;
+		if (K4A_RESULT_SUCCEEDED != k4a_image_create_from_buffer(
+			rgb ? K4A_IMAGE_FORMAT_COLOR_BGRA32 : K4A_IMAGE_FORMAT_DEPTH16,
+			width, height,
+			rgb ? (width * 4) : (width * 2),
+			data.data(),
+			data.size(),
+			nullptr, nullptr,
+			&res
+		)) {
+			res = nullptr;
+		}
 		return res;
 	}
 
@@ -208,52 +247,31 @@ namespace kinectCloud {
 	// expLoc   = output pts path
 	// conf     = config from the device which produced the color and depth images
 	void transformImage(std::string colorLoc, std::string depthLoc, std::string expLoc, deviceConfig const& conf) {
-		auto colorBytes = loadBitmap(colorLoc);
-		if (colorBytes.size() != (conf.colorRes.x * conf.colorRes.y * 4)) colorBytes = addAComponentToRGBColor(colorBytes); // it may be necessary to convert RGB to RBGA
-		auto depthBytes = loadBitmap(depthLoc);
-
-		k4a_image_t colorImg = nullptr;
-		k4a_image_t depthImg = nullptr;
+		k4a_image_t colorImg = loadPNGtoK4A(colorLoc);
+		k4a_image_t depthImg = loadPNGtoK4A(depthLoc);
 		k4a_image_t transformedDepthImg = nullptr;
 		k4a_image_t xyzImg = nullptr;
 
 		try {
-			if (K4A_RESULT_SUCCEEDED != k4a_image_create_from_buffer(
-				K4A_IMAGE_FORMAT_COLOR_BGRA32,
-				conf.colorRes.x,
-				conf.colorRes.y,
-				conf.colorRes.x * sizeof(uint8_t) * 4,
-				colorBytes.data(),
-				colorBytes.size() * sizeof(uint8_t),
-				nullptr,
-				nullptr,
-				&colorImg))
-			{
-				throw std::runtime_error("failed to create color image from data");
-			}
+			if (colorImg == nullptr) throw std::runtime_error("failed to load color image");
 
-			if (K4A_RESULT_SUCCEEDED != k4a_image_create_from_buffer(
-				K4A_IMAGE_FORMAT_DEPTH16,
-				conf.depthRes.x,
-				conf.depthRes.y,
-				conf.depthRes.x * sizeof(int16_t),
-				depthBytes.data(),
-				depthBytes.size() * sizeof(uint8_t),
-				nullptr,
-				nullptr,
-				&depthImg))
-			{
-				throw std::runtime_error("failed to create depth image from data");
-			}
+			if (depthImg == nullptr) throw std::runtime_error("failed to load depth image");
 
 			if (K4A_RESULT_SUCCEEDED != k4a_image_create(
 				K4A_IMAGE_FORMAT_DEPTH16,
 				conf.colorRes.x,
 				conf.colorRes.y,
 				conf.colorRes.x * sizeof(int16_t),
-				&transformedDepthImg))
-			{
+				&transformedDepthImg)) {
 				throw std::runtime_error("failed to create transformed depth image");
+			}
+
+			if (K4A_RESULT_SUCCEEDED != k4a_transformation_depth_image_to_color_camera(
+				conf.trans,
+				depthImg,
+				transformedDepthImg
+			)) {
+				throw std::runtime_error("failed to transform depth image to color image space");
 			}
 
 			if (K4A_RESULT_SUCCEEDED != k4a_image_create(
@@ -261,18 +279,8 @@ namespace kinectCloud {
 				conf.colorRes.x,
 				conf.colorRes.y,
 				conf.colorRes.x * sizeof(int16_t) * 3,
-				&xyzImg))
-			{
+				&xyzImg)) {
 				throw std::runtime_error("failed to create xyz image");
-			}
-
-			if (K4A_RESULT_SUCCEEDED != k4a_transformation_depth_image_to_color_camera(
-				conf.trans,
-				depthImg,
-				transformedDepthImg
-			))
-			{
-				throw std::runtime_error("failed to transform depth image to color image space");
 			}
 
 			if (K4A_RESULT_SUCCEEDED != k4a_transformation_depth_image_to_point_cloud(
@@ -284,9 +292,8 @@ namespace kinectCloud {
 				throw std::runtime_error("failed to transform mapped depth to point cloud image");
 			}
 
-			savePointCloud(conf.colorRes, xyzImg, colorImg, R"(C:\Users\bwysonggrass\Desktop\test.pts)");
-		}
-		catch (std::runtime_error const& er) {
+			savePointCloud(conf.colorRes, xyzImg, colorImg, expLoc);
+		} catch (std::runtime_error const& er) {
 			std::cout << er.what() << "\n";
 		}
 
@@ -294,24 +301,6 @@ namespace kinectCloud {
 		if (depthImg) k4a_image_release(depthImg);
 		if (transformedDepthImg) k4a_image_release(transformedDepthImg);
 		if (xyzImg) k4a_image_release(xyzImg);
-	}
-
-	// add blank alpha component to vector of rgb pixels
-	std::vector<uint8_t> addAComponentToRGBColor(std::vector<uint8_t> const& rgbColorBytes) {
-		if (rgbColorBytes.size() % 3 != 0) throw std::runtime_error("color image bytes improperly sized");
-		std::vector<uint8_t> res;
-		res.resize(rgbColorBytes.size() / 3 * 4);
-
-		size_t resi = 0;
-		for (size_t i = 0; i < rgbColorBytes.size(); i += 3) {
-			res[resi + 0] = rgbColorBytes[i + 0];
-			res[resi + 1] = rgbColorBytes[i + 1];
-			res[resi + 2] = rgbColorBytes[i + 2];
-			res[resi + 3] = 0;
-			resi += 4;
-		}
-
-		return res;
 	}
 #endif
 }

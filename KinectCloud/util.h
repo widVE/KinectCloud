@@ -8,6 +8,7 @@
 #include <thread>
 
 #include <glm/ext.hpp>
+#include <lodepng.h>
 
 namespace kinectCloud {
 
@@ -26,6 +27,14 @@ namespace kinectCloud {
 	std::string readEntireFile(std::string const& path) {
 		std::ifstream ifs(path);
 		return std::string(
+			std::istreambuf_iterator<char>(ifs),
+			std::istreambuf_iterator<char>()
+		);
+	}
+
+	std::vector<uint8_t> readEntireFileBinary(std::string const& path) {
+		std::ifstream ifs(path, std::ios::binary);
+		return std::vector<uint8_t>(
 			std::istreambuf_iterator<char>(ifs),
 			std::istreambuf_iterator<char>()
 		);
@@ -65,7 +74,7 @@ namespace kinectCloud {
 	// in base, replace %s with serial and %f with frameNum
 	// only the first instance of %s, %f, is used
 	// substitution only occurs if %s or %f are found
-	std::string formatFilePath(std::string base, std::string serial, int frameNum) {
+	std::string formatFilePath(std::string base, std::string serial, std::string frameNum) {
 		size_t sf = base.find("%s");
 		if (sf != std::string::npos) {
 			base = base.substr(0, sf) + serial + base.substr(sf + 2);
@@ -73,7 +82,7 @@ namespace kinectCloud {
 
 		size_t ff = base.find("%f");
 		if (ff != std::string::npos) {
-			base = base.substr(0, ff) + std::to_string(frameNum) + base.substr(ff + 2);
+			base = base.substr(0, ff) + frameNum + base.substr(ff + 2);
 		}
 
 		return base;
@@ -102,11 +111,17 @@ namespace kinectCloud {
 	}
 
 #ifdef KINECTCLOUD_EXPERIMENTAL
-	// execute command asynchronously
+	// execute command synchronously
 	std::string exec(const char* cmd) {
 		char buffer[128];
 		std::string result = "";
+#ifdef __linux__ 
+		FILE* pipe = popen(cmd, "r");
+#elif _WIN32
 		FILE* pipe = _popen(cmd, "r");
+#else
+		FILE* pipe = NULL;
+#endif
 		if (!pipe) throw std::runtime_error("popen() failed!");
 		try {
 			while (fgets(buffer, sizeof buffer, pipe) != NULL) {
@@ -157,8 +172,8 @@ namespace kinectCloud {
 		fread(info, sizeof(unsigned char), 54, f); // read the 54-byte header
 
 		// extract image height and width from header
-		int width = *(int*)&info[18];
-		int height = *(int*)&info[22];
+		int width =		*(int*)&info[18];
+		int height =	*(int*)&info[22];
 
 		int size = 3 * width * height;
 		std::vector<uint8_t> res;
@@ -173,6 +188,25 @@ namespace kinectCloud {
 			res.data()[i + 2] = tmp;
 		}
 		return res;
+	}
+
+	std::vector<uint8_t> loadPng(std::string const& file, uint32_t& width, uint32_t& height, int& componentSize, bool& hasAlpha, bool& isRGB) {
+		std::vector<uint8_t> input = readEntireFileBinary(file);
+		std::vector<uint8_t> res;
+		lodepng::State s;
+		s.decoder.color_convert = false;
+		lodepng::decode(res, width, height, s, input);
+		componentSize = s.info_png.color.bitdepth;
+		hasAlpha =
+			(s.info_raw.colortype == LCT_GREY_ALPHA || s.info_raw.colortype == LCT_RGBA);
+		isRGB =
+			(s.info_raw.colortype == LCT_RGB || s.info_raw.colortype == LCT_RGBA);
+		return res;
+	}
+
+	int numFramesInMKV(std::string const& ffprobePath, std::string const& mkvPath) {
+		auto res = exec((ffprobePath + R"( -v error -count_frames -select_streams v:0 -show_entries stream=nb_read_frames -of default=nokey=1:noprint_wrappers=1 )" + mkvPath).c_str());
+		return std::stoi(res);
 	}
 #endif
 }
