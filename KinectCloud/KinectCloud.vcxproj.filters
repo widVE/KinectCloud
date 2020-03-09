@@ -30,6 +30,15 @@
     <ClInclude Include="azureKinectPlayback.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="azureKinectRecord.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="azureKinectServer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="httplib.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Scanner.cpp">

@@ -12,6 +12,8 @@
 #include "cloud.h"
 #include "azureKinectDK.h"
 #include "azureKinectPlayback.h"
+#include "azureKinectRecord.h"
+#include "azureKinectServer.h"
 
 //constexpr auto FFMPEG_DIR = R"(C:\Users\bwysonggrass\Desktop\ffmpeg-20190826-0821bc4-win64-static\bin\)";
 
@@ -81,14 +83,30 @@ namespace kinectCloud {
 			}
 			std::cout << "\n";
 		}
+		
 		for (auto &dev : devices) {
+			k4a_device_configuration_t confToUse = K4A_DEVICE_CONFIG_INIT_DISABLE_ALL;
+			confToUse.camera_fps = K4A_FRAMES_PER_SECOND_5;
+			confToUse.synchronized_images_only = true;
+			if(otherOptions.find("-r") != otherOptions.end()) {
+				confToUse.color_format = K4A_IMAGE_FORMAT_COLOR_MJPG;
+			} else {
+				confToUse.color_format = K4A_IMAGE_FORMAT_COLOR_BGRA32;
+			}
+
 			std::string serial = dev.getSerialNum();
 			if (deviceInfo.find(serial) != deviceInfo.end()) {
 				auto info = deviceInfo[serial];
-				dev.start(info.syncMode, info.colorRes, info.depthMode);
+				confToUse.wired_sync_mode = info.syncMode;
+				confToUse.color_resolution = info.colorRes;
+				confToUse.depth_mode = info.depthMode;
 			} else {
-				dev.start(defaultSyncMode, (allResolution != K4A_COLOR_RESOLUTION_OFF) ? allResolution : defaultColorRes, (allDepth != K4A_DEPTH_MODE_OFF) ? allDepth : defaultDepthMode);
+				confToUse.wired_sync_mode = defaultSyncMode;
+				confToUse.color_resolution = (allResolution != K4A_COLOR_RESOLUTION_OFF) ? allResolution : defaultColorRes;
+				confToUse.depth_mode = (allDepth != K4A_DEPTH_MODE_OFF) ? allDepth : defaultDepthMode;
 			}
+
+			dev.start(confToUse);
 		}
 		if (colorExposure) {
 			for (auto &dev : devices) {
@@ -136,17 +154,48 @@ namespace kinectCloud {
 		if (waitMillis != 0) std::this_thread::sleep_for(std::chrono::milliseconds(waitMillis));
 
 		int frameNum = 0;
-		while (true) {
-			for (auto & device : devices) {
-				device.captureFrame();
+		
+		if (otherOptions.find("-r") != otherOptions.end()) {
+			std::vector<azureKinectRecord> recordings;
+			for (auto& device : devices) {
+				recordings.emplace_back(&device, formatFilePath(outPath, device.getSerialNum(), "%f"));
+				recordings.back().writeHeader();
 			}
-			for (auto & device : devices) {
-				device.saveCurrentPointCloud(formatFilePath(outPath, device.getSerialNum(), std::to_string(frameNum)));
+			while (true) {
+				for (auto& recording : recordings) {
+					recording.recordFrame();
+				}
+				frameNum++;
+				if (frameNum >= consecutiveCount) break;
 			}
-			if(verbose) std::cout << "Saved " << formatFilePath(outPath, "%s", std::to_string(frameNum)) << "\n";
-			frameNum++;
-			if (frameNum >= consecutiveCount) break;
+		} else {
+			while (true) {
+				for (auto& device : devices) {
+					device.captureFrame();
+				}
+				for (auto& device : devices) {
+					device.saveCurrentPointCloud(formatFilePath(outPath, device.getSerialNum(), std::to_string(frameNum)));
+				}
+				if (verbose) std::cout << "Saved " << formatFilePath(outPath, "%s", std::to_string(frameNum)) << "\n";
+				frameNum++;
+				if (frameNum >= consecutiveCount) break;
+			}
 		}
+
+		return 0;
+	}
+
+	int serverMode() {
+		auto kc = new kinectCloud::azureKinectDK(0);
+		k4a_device_configuration_t conf = K4A_DEVICE_CONFIG_INIT_DISABLE_ALL;
+		conf.color_format = K4A_IMAGE_FORMAT_COLOR_BGRA32;
+		conf.color_resolution = K4A_COLOR_RESOLUTION_720P;
+		conf.depth_mode = K4A_DEPTH_MODE_NFOV_2X2BINNED;
+		conf.camera_fps = K4A_FRAMES_PER_SECOND_30;
+		conf.synchronized_images_only = true;
+		conf.wired_sync_mode = K4A_WIRED_SYNC_MODE_STANDALONE;
+		kc->start(conf);
+		auto abc = new kinectCloud::azureKinectServer(kc, 10);
 
 		return 0;
 	}
@@ -160,7 +209,9 @@ namespace kinectCloud {
 		std::vector<std::string> alerts;
 
 		for (int i = 1; i < argc; i++) {
-			if (argv[i] == std::string("-e")) { // extract pointcloud from video
+			if (argv[i] == std::string("-r")) {
+				otherOptions.insert(argv[i]);
+			} else if (argv[i] == std::string("-e")) { // extract pointcloud from video
 				mode = "-e";
 				if (outPath.empty()) outPath = "e_%f.pts";
 				if (++i != argc) {
@@ -183,6 +234,9 @@ namespace kinectCloud {
 					alerts.push_back("Error: -ei must be followed by decimal value");
 					badParams = true;
 				}
+			}
+			else if (argv[i] == std::string("-h")) {
+				mode = "-h";
 			}
 			//else if(argv[i] == std::string("-fa")) { // capture and save pointcloud
 			//	if (++i != argc) {
@@ -341,6 +395,7 @@ namespace kinectCloud {
 			}
 			if (true) {
 				std::cout << "options:\n";
+				std::cout << " -r              | record to a file (must also specify device options)\n";
 				std::cout << " -e              | extract all colored frames into pts files\n";
 				std::cout << " -ei wait        | minimum time between extracted frame (seconds)\n";
 				std::cout << " -f n            | extract single frame n only (may do nothing)\n";
@@ -359,10 +414,11 @@ namespace kinectCloud {
 				std::cout << " -dra {res}      | declare resolution to use for all devices\n";
 				std::cout << "   color resolutions: " VALID_RESOLUTIONS ", default is 720P\n";
 				std::cout << " -dm ser {mode}  | declare depth mode to use for specific device\n";
-				std::cout << " -dra {mode}     | declare depth mode to use for all devices\n";
+				std::cout << " -dma {mode}     | declare depth mode to use for all devices\n";
 				std::cout << "   depth modes      : " VALID_DEPTHS ", default is NFOV_2X2BINNED\n";
 				std::cout << " -ce int         | color camera exposure time in nanoseconds for all devices\n";
 				std::cout << " -cw int         | color camera white balance in kelvin for all devices (must be % by 10)\n";
+				std::cout << " -h              | (experimental) host server which serves point clouds, port 5687\n";
 				std::cout << " -v              | verbose output\n";
 			}
 			return 0;
@@ -373,6 +429,8 @@ namespace kinectCloud {
 		} else if(mode == "-s") {
 			startDevices();
 			captureMode();
+		} else if (mode == "-h") {
+			serverMode();
 		}
 
 		return 0;

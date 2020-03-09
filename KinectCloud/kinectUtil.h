@@ -115,13 +115,13 @@ namespace kinectCloud {
 					*current = ' '; current++;
 					current = fastCopyInt16Str(current, pz);
 					*current = ' '; current++;
-					current = fastCopyInt16Str(current, pr);
+					current = fastCopyInt16Str(current, pb);
 					*current = ' '; current++;
 					current = fastCopyInt16Str(current, pg);
 					*current = ' '; current++;
-					current = fastCopyInt16Str(current, pb);
-					*current = ' '; current++;
-					current = fastCopyInt16Str(current, pa);
+					current = fastCopyInt16Str(current, pr);
+					//*current = ' '; current++;
+					//current = fastCopyInt16Str(current, pa);
 					*current = '\n'; current++;
 				}
 			}
@@ -129,6 +129,51 @@ namespace kinectCloud {
 		FILE* fout = fopen(loc.c_str(), "wb");
 		fwrite(bytes.data(), 1, (current - bytes.data()), fout);
 		fclose(fout);
+	}
+
+	// save existing xyz and color image in data block
+	uint64_t savePointCloudRaw(glm::uvec2 size, k4a_image_t xyzImg, k4a_image_t colorImg, uint8_t* data) {
+		uint32_t resWidth = size.x, resHeight = size.y;
+		uint32_t colorStride = resWidth * sizeof(uint8_t) * 4;
+		uint32_t xyzStride = resWidth * sizeof(int16_t) * 3;
+
+		std::vector<char> bytes;
+		bytes.resize(resWidth * resHeight * (7 * 3 + 4 * 3));
+		char* current = bytes.data();
+
+		uint8_t* rawData = k4a_image_get_buffer(xyzImg);
+		auto a = k4a_image_get_stride_bytes(colorImg);
+		auto b = k4a_image_get_size(colorImg);
+		uint8_t* colorData = k4a_image_get_buffer(colorImg);
+
+		uint64_t index = 0;
+		const uint64_t pointSize = sizeof(int16_t) * 3 + sizeof(uint8_t) * 3; // xyz + rgb
+		for (int y = 0; y < resHeight; y++) {
+			for (int x = 0; x < resWidth; x++) {
+				int16_t px = *(int16_t*)(rawData + y * xyzStride + x * 6 + 0);
+				int16_t py = *(int16_t*)(rawData + y * xyzStride + x * 6 + 2);
+				int16_t pz = *(int16_t*)(rawData + y * xyzStride + x * 6 + 4);
+				uint8_t pr = *(colorData + y * colorStride + x * 4 + 0);
+				uint8_t pg = *(colorData + y * colorStride + x * 4 + 1);
+				uint8_t pb = *(colorData + y * colorStride + x * 4 + 2);
+				uint8_t pa = *(colorData + y * colorStride + x * 4 + 3);
+
+				if (px != 0 || py != 0 || pz != 0) {
+					uint8_t* dataStart = (data + (index * pointSize));
+					*(((int16_t*)dataStart) + 0) = px;
+					*(((int16_t*)dataStart) + 1) = py;
+					*(((int16_t*)dataStart) + 2) = pz;
+
+					*(dataStart + 6) = pr;
+					*(dataStart + 7) = pg;
+					*(dataStart + 8) = pb;
+
+					index++;
+				}
+			}
+		}
+
+		return index;
 	}
 
 #if KINECTCLOUD_EXPERIMENTAL

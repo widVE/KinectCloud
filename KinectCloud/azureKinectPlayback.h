@@ -130,7 +130,7 @@ namespace kinectCloud {
 			return _eof;
 		}
 
-		// open playback with given serial number
+		// open playback with given filepath
 		inline azureKinectPlayback(std::string const& path) {
 			if (K4A_RESULT_SUCCEEDED != k4a_playback_open(path.c_str(), &_playback)) {
 				_playback = nullptr;

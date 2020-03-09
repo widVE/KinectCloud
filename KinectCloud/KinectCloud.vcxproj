@@ -21,7 +21,10 @@
   <ItemGroup>
     <ClInclude Include="azureKinectDK.h" />
     <ClInclude Include="azureKinectPlayback.h" />
+    <ClInclude Include="azureKinectRecord.h" />
+    <ClInclude Include="azureKinectServer.h" />
     <ClInclude Include="cloud.h" />
+    <ClInclude Include="httplib.h" />
     <ClInclude Include="kinectUtil.h" />
     <ClInclude Include="util.h" />
   </ItemGroup>

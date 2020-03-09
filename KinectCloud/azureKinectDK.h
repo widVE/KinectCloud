@@ -11,7 +11,23 @@ namespace kinectCloud {
 
 		k4a_calibration_t _cali;
 		std::string _serial;
+
+		k4a_device_configuration_t _config;
 	public:
+		// get current capture, may be null. managed.
+		inline k4a_capture_t getCurrCapture() {
+			return _capture;
+		}
+
+		// get device. managed.
+		inline k4a_device_t getDevice() {
+			return _device;
+		}
+
+		// get config. managed.
+		inline k4a_device_configuration_t getConfig() {
+			return _config;
+		}
 
 		// call kinect api to retrieve serial number of this device
 		inline std::string getSerialNum() {
@@ -113,6 +129,70 @@ namespace kinectCloud {
 			k4a_image_release(xyzImage);
 		}
 
+		// transform current frame into point cloud and load into data block
+		//[int16 x 0][int16 y 0][int16 z 0][uint8 r 0][uint8 g 0][uint8 b 0]
+		//[int16 x 1][int16 y 1][int16 z 1][uint8 r 1][uint8 g 1][uint8 b 1]
+		//...
+		//[int16 x (numPoints-1)][int16 y (numPoints-1)] ... [uint8  (numPoints-1)]
+		inline uint64_t saveCurrentPointCloudRaw(uint8_t* data) {
+			k4a_image_t depthImage = k4a_capture_get_depth_image(_capture);
+			k4a_image_t colorImage = k4a_capture_get_color_image(_capture);
+			k4a_image_t transformedDepthImage = nullptr;
+			k4a_image_t xyzImage = nullptr;
+
+			uint32_t resWidth = k4a_image_get_width_pixels(colorImage);
+			uint32_t resHeight = k4a_image_get_height_pixels(colorImage);
+			uint32_t colorStride = resWidth * sizeof(uint8_t) * 4;
+			uint32_t xyzStride = resWidth * sizeof(int16_t) * 3;
+			uint32_t transformedDepthStride = resWidth * sizeof(uint16_t);
+
+			if (K4A_RESULT_SUCCEEDED != k4a_image_create(K4A_IMAGE_FORMAT_DEPTH16, resWidth, resHeight, transformedDepthStride, &transformedDepthImage)) {
+				k4a_image_release(depthImage);
+				k4a_image_release(colorImage);
+				throw std::runtime_error("failed to create mapped color image");
+			}
+
+			if (K4A_RESULT_SUCCEEDED != k4a_transformation_depth_image_to_color_camera(
+				_transform,
+				depthImage,
+				transformedDepthImage
+			)) {
+				k4a_image_release(depthImage);
+				k4a_image_release(colorImage);
+				k4a_image_release(transformedDepthImage);
+				throw std::runtime_error("failed to transform depth image to color image space");
+			}
+
+			k4a_image_release(depthImage);
+
+			if (K4A_RESULT_SUCCEEDED != k4a_image_create(K4A_IMAGE_FORMAT_CUSTOM, resWidth, resHeight, xyzStride, &xyzImage)) {
+				k4a_image_release(colorImage);
+				k4a_image_release(transformedDepthImage);
+				throw std::runtime_error("failed to create point cloud image");
+			}
+
+			if (K4A_RESULT_SUCCEEDED != k4a_transformation_depth_image_to_point_cloud(
+				_transform,
+				transformedDepthImage,
+				K4A_CALIBRATION_TYPE_COLOR,
+				xyzImage
+			)) {
+				k4a_image_release(colorImage);
+				k4a_image_release(xyzImage);
+				k4a_image_release(transformedDepthImage);
+				throw std::runtime_error("failed to transform mapped depth to point cloud image");
+			}
+
+			k4a_image_release(transformedDepthImage);
+
+			uint64_t finalSize = savePointCloudRaw(glm::uvec2(resWidth, resHeight), xyzImage, colorImage, data);
+
+			k4a_image_release(colorImage);
+			k4a_image_release(xyzImage);
+
+			return finalSize;
+		}
+
 		// get the next frame and keep it in memory until next frame is retrieved
 		inline void captureFrame() {
 			if (_capture != nullptr) {
@@ -126,21 +206,36 @@ namespace kinectCloud {
 			}
 		}
 
-		// start cameras
+		// start cameras with default config
 		inline void start(k4a_wired_sync_mode_t auth, k4a_color_resolution_t colorRes, k4a_depth_mode_t depthMode) {
-			k4a_device_configuration_t config = K4A_DEVICE_CONFIG_INIT_DISABLE_ALL;
-			config.color_format = K4A_IMAGE_FORMAT_COLOR_BGRA32;
-			config.color_resolution = colorRes;
-			config.depth_mode = depthMode;
-			config.camera_fps = K4A_FRAMES_PER_SECOND_5;
-			config.synchronized_images_only = true;
-			config.wired_sync_mode = auth;
+			_config = K4A_DEVICE_CONFIG_INIT_DISABLE_ALL;
+			_config.color_format = K4A_IMAGE_FORMAT_COLOR_BGRA32;
+			_config.color_resolution = colorRes;
+			_config.depth_mode = depthMode;
+			_config.camera_fps = K4A_FRAMES_PER_SECOND_5;
+			_config.synchronized_images_only = true;
+			_config.wired_sync_mode = auth;
 
-			if (K4A_RESULT_SUCCEEDED != k4a_device_start_cameras(_device, &config)) {
+			if (K4A_RESULT_SUCCEEDED != k4a_device_start_cameras(_device, &_config)) {
 				throw std::runtime_error("failed to start cameras");
 			}
 
-			if (K4A_RESULT_SUCCEEDED != k4a_device_get_calibration(_device, config.depth_mode, config.color_resolution, &_cali)) {
+			if (K4A_RESULT_SUCCEEDED != k4a_device_get_calibration(_device, _config.depth_mode, _config.color_resolution, &_cali)) {
+				throw std::runtime_error("failed to get device calibration");
+			}
+
+			_transform = k4a_transformation_create(&_cali);
+		}
+
+		// start cameras from arbitrary configuration
+		inline void start(k4a_device_configuration_t conf) {
+			_config = conf;
+
+			if (K4A_RESULT_SUCCEEDED != k4a_device_start_cameras(_device, &_config)) {
+				throw std::runtime_error("failed to start cameras");
+			}
+
+			if (K4A_RESULT_SUCCEEDED != k4a_device_get_calibration(_device, _config.depth_mode, _config.color_resolution, &_cali)) {
 				throw std::runtime_error("failed to get device calibration");
 			}
 
@@ -155,8 +250,7 @@ namespace kinectCloud {
 					if (getSerialNum() != serialNum) {
 						k4a_device_close(_device);
 						_device = nullptr;
-					}
-					else {
+					} else {
 						return;
 					}
 				}
@@ -166,7 +260,7 @@ namespace kinectCloud {
 		}
 
 		// open device with given index
-		inline azureKinectDK(uint32_t deviceIndex) {
+		inline azureKinectDK(uint32_t deviceIndex) : _cali{}, _config{} {
 			if (K4A_RESULT_SUCCEEDED != k4a_device_open(deviceIndex, &_device)) {
 				_device = nullptr;
 				throw std::runtime_error("Can't open device");
@@ -217,11 +311,13 @@ namespace kinectCloud {
 			_transform = other._transform;
 			_capture = other._capture;
 			_serial = other._serial;
+			_config = other._config;
 
 			other._device = nullptr;
 			other._capture = nullptr;
 			other._transform = nullptr;
 			other._serial.clear();
+			other._config = { };
 		}
 	};
 }

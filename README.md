@@ -24,13 +24,26 @@ KinectCloud.exe -s -ce 31250 -cw 4800
 ```
 
 ```powershell
+# host a server from which point clouds can be received
+# more options will be added in the future
+KinectCloud.exe -h
+```
+
+
+```powershell
 # print out help
 KinectCloud.exe
 ```
 
 ```
 options:
+ -r              | record to a file (must also specify device options)
+ -e              | extract all colored frames into pts files
+ -ei wait        | minimum time between extracted frame (seconds)
+ -f n            | extract single frame n only (may do nothing)
+ -fa n           | extract every n frames starting at 0 from video (1 = every frame)
  -s              | capture a colored pointcloud for devices (by default first device only)
+ -i file         | specify input file (if applicable)
  -o path         | specify output locations (default %s_%f.pts)
                  | %s -> serial number, %f -> frame number
  -w int          | wait a number of milliseconds after device startup (if applicable)
@@ -43,9 +56,10 @@ options:
  -dra {res}      | declare resolution to use for all devices
    color resolutions: { 720P, 1080P, 1440P, 1536P, 2160P, 3072P }, default is 720P
  -dm ser {mode}  | declare depth mode to use for specific device
- -dra {mode}     | declare depth mode to use for all devices
+ -dma {mode}     | declare depth mode to use for all devices
    depth modes      : { NFOV_2X2BINNED, NFOV_UNBINNED, WFOV_2X2BINNED, WFOV_UNBINNED }, default is NFOV_2X2BINNED
  -ce int         | color camera exposure time in nanoseconds for all devices
  -cw int         | color camera white balance in kelvin for all devices (must be % by 10)
+ -h              | (experimental) host server which serves point clouds, port 5687
  -v              | verbose output
 ```
