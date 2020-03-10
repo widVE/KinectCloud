@@ -29,6 +29,8 @@ KinectCloud.exe -s -ce 31250 -cw 4800
 KinectCloud.exe -h
 ```
 
+![Unity Sample point stream](https://raw.githubusercontent.com/widVE/KinectCloud/master/media/untiy_sample.png "Realtime point streaming in Unity (project can be found in samples folder)")
+
 
 ```powershell
 # print out help
